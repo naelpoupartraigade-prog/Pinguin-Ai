@@ -118,6 +118,10 @@ button{cursor:pointer;border:none;border-radius:var(--r);font-size:13px;font-fam
 .sb-foot{border-top:1px solid var(--border);padding:10px 12px;flex-shrink:0}
 .sb-owner-btn{width:100%;text-align:left;padding:8px 10px;margin-bottom:6px;font-size:12px;background:rgba(255,107,157,.06);border:1px solid rgba(255,107,157,.2);color:var(--accent);border-radius:var(--r)}
 .sb-owner-btn:hover{background:rgba(255,107,157,.12);border-color:rgba(255,107,157,.35)}
+.pm-btn{width:100%;text-align:left;padding:8px 12px;font-size:13px;color:var(--text);background:transparent;border:none;border-radius:var(--r);display:block;margin-bottom:1px}
+.pm-btn:hover{background:var(--bg3);color:var(--text)}
+.pm-btn-danger{color:var(--red)!important}
+.pm-btn-danger:hover{background:rgba(248,113,113,.1)!important}
 .sb-user-row{display:flex;align-items:center;gap:8px;padding:6px 2px}
 .av{display:flex;align-items:center;justify-content:center;border-radius:50%;font-weight:700;color:#fff;flex-shrink:0}
 .sb-uname{font-size:12px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;flex:1;min-width:0}
@@ -326,11 +330,23 @@ tr:hover td{background:rgba(255,255,255,.015)}
     <div class="sb-body" id="conv-list"></div>
     <div class="sb-foot">
       <button class="sb-owner-btn" id="owner-panel-btn" style="display:none" onclick="showPanel()">👑 Panel Owner</button>
-      <div class="sb-user-row">
+      <!-- PROFILE MENU POPUP -->
+      <div id="profile-menu" style="display:none;position:absolute;bottom:72px;left:10px;right:10px;background:var(--card2);border:1px solid var(--border2);border-radius:14px;padding:6px;z-index:200;box-shadow:0 8px 30px rgba(0,0,0,.5)">
+        <div style="padding:10px 12px 8px;border-bottom:1px solid var(--border);margin-bottom:4px">
+          <div style="font-size:13px;font-weight:700" id="pm-name">—</div>
+          <div style="font-size:11px;color:var(--text3)" id="pm-email">—</div>
+        </div>
+        <button class="pm-btn" onclick="openModal('settings');closeProfileMenu()">⚙️ Paramètres</button>
+        <button class="pm-btn" onclick="openModal('switchAccount');closeProfileMenu()">🔄 Changer de compte</button>
+        <button class="pm-btn" onclick="closeProfileMenu();goAuth('login')">➕ Ajouter un compte</button>
+        <hr style="border:none;border-top:1px solid var(--border);margin:4px 0">
+        <button class="pm-btn pm-btn-danger" onclick="doLogout();closeProfileMenu()">⏻ Se déconnecter</button>
+      </div>
+      <div class="sb-user-row" onclick="toggleProfileMenu()" style="cursor:pointer" title="Mon profil">
         <div class="av" id="sb-av" style="width:30px;height:30px;font-size:12px">Z</div>
         <div class="sb-uname" id="sb-uname">—</div>
         <span class="badge b-user" id="sb-role">User</span>
-        <button class="logout-btn" onclick="doLogout()" title="Déconnexion">⏻</button>
+        <span style="color:var(--text3);font-size:12px;margin-left:auto">⌃</span>
       </div>
     </div>
   </div>
@@ -418,11 +434,13 @@ const S={user:null,convId:null,loading:false,panel:false,ptab:'dashboard',sbOpen
 
 function kv(k,v){try{if(v===undefined)return JSON.parse(localStorage.getItem('ax_'+k));localStorage.setItem('ax_'+k,JSON.stringify(v));}catch(e){return null}}
 function gU(){return kv('users')||[]}
-function gC(){return kv('convs')||{}}
+// Conversations par utilisateur
+function gC(){ return kv('convs_'+(S.user?.id||'guest'))||{}; }
+function sC(v){ kv('convs_'+(S.user?.id||'guest'),v); }
 function gP(){return kv('prompts')||[]}
 function gSites(){return kv('sites')||[]}
 function gL(){return kv('logs')||[]}
-function sU(v){kv('users',v)}function sC(v){kv('convs',v)}function sP(v){kv('prompts',v)}function sSites(v){kv('sites',v)}
+function sU(v){kv('users',v)}function sP(v){kv('prompts',v)}function sSites(v){kv('sites',v)}
 function aLog(user,action,type){const l=gL();l.unshift({id:'l'+Date.now(),time:new Date().toLocaleString('fr-FR'),user,action,type});if(l.length>300)l.length=300;kv('logs',l)}
 
 function initData(){
@@ -578,7 +596,32 @@ function switchAuth(type){
   document.getElementById('re').style.display='none';
 }
 
+// ── PROFILE MENU ──
+function toggleProfileMenu(){
+  const m=document.getElementById('profile-menu');
+  if(!m) return;
+  m.style.display=m.style.display==='none'?'block':'none';
+}
+function closeProfileMenu(){
+  const m=document.getElementById('profile-menu');
+  if(m) m.style.display='none';
+}
+// Fermer le menu si clic ailleurs
+document.addEventListener('click',e=>{
+  const m=document.getElementById('profile-menu');
+  const row=document.querySelector('.sb-user-row');
+  if(m&&row&&!m.contains(e.target)&&!row.contains(e.target)) m.style.display='none';
+});
+
 // ── AUTH ──
+function saveKnownAccount(u){
+  let known=kv('known_accounts')||[];
+  known=known.filter(x=>x.id!==u.id);
+  known.unshift({id:u.id,name:u.name,email:u.email,color:u.color||'#60A5FA',role:u.role});
+  if(known.length>5) known.length=5;
+  kv('known_accounts',known);
+}
+
 function showErr(id,msg){const e=document.getElementById(id);e.textContent=msg;e.style.display='block'}
 function hideAuthErr(){['le','re'].forEach(id=>{const e=document.getElementById(id);if(e)e.style.display='none'});}
 
@@ -590,7 +633,7 @@ function doLogin(){
   const u=gU().find(x=>x.email.toLowerCase()===email&&x.password===pass);
   if(!u){showErr('le','Email ou mot de passe incorrect.');return}
   S.user={...u};
-  saveSession(u);
+  saveSession(u); saveKnownAccount(u);
   aLog(u.email,'Connexion','auth');
   document.getElementById('auth').style.display='none';
   document.getElementById('app').style.display='flex';
@@ -614,7 +657,7 @@ function doRegister(){
   users.push(nu);sU(users);
   aLog(email,'Inscription','auth');
   S.user={...nu};
-  saveSession(nu);
+  saveSession(nu); saveKnownAccount(nu);
   document.getElementById('auth').style.display='none';
   document.getElementById('app').style.display='flex';
   initApp();
@@ -628,6 +671,15 @@ function doLogout(){
   document.getElementById('landing').style.display='flex';
 }
 
+function switchToAccount(userId){
+  const u=gU().find(x=>x.id===userId);
+  if(!u) return;
+  S.user={...u}; S.convId=null; S.panel=false;
+  saveSession(u); saveKnownAccount(u);
+  closeModal();
+  initApp(); showChat(); renderConvList();
+}
+
 // ── APP INIT ──
 function initApp(){
   const av=document.getElementById('sb-av');
@@ -639,6 +691,11 @@ function initApp(){
   roleEl.textContent=isOwner?'Owner':'User';
   roleEl.className='badge '+(isOwner?'b-owner':'b-user');
   document.getElementById('owner-panel-btn').style.display=isOwner?'block':'none';
+  // Profile menu data
+  const pmn=document.getElementById('pm-name');
+  const pme=document.getElementById('pm-email');
+  if(pmn) pmn.textContent=S.user.name;
+  if(pme) pme.textContent=S.user.email;
   document.getElementById('tb-prompt').textContent=getActivePromptsLabel();
 
   const inp=document.getElementById('chat-inp');
@@ -864,9 +921,9 @@ async function sendMsg(){
 
   showThinking();
 
-  // Détection image → génération directe sans IA
-  const imgTriggers=/\b(génère|générer|crée|créer|fais|faire|montre|donne|image|photo|bannière|logo|miniature|fond d'écran|pfp|avatar|illustration)\b.*\b(image|photo|bannière|logo|miniature|fond|pfp|avatar|illustration|dessin|picture)\b|\b(image|photo)\b.*\bde\b/i;
-  if(imgTriggers.test(txt)){
+  // Détection image : ne se déclenche que si le message est clairement une demande d'image (>12 chars, mot-clé au début)
+  const imgKeywords=/^(génère|générer|crée|créer|fais-moi|donne-moi|montre-moi|make|generate|create).{3,}.*(image|photo|bannière|logo|miniature|fond d'écran|pfp|avatar|illustration|picture|wallpaper|banner)/i;
+  if(imgKeywords.test(txt) && txt.length > 12){
     const prompt=txt.replace(/génère|crée|fais-moi|donne-moi|montre-moi|une image de|une image d'|une photo de|un logo de|une bannière de/gi,'').trim();
     const aiReply=`[GENERATE_IMAGE: ${prompt}, high quality, detailed, digital art]`;
     hideThinking();
@@ -882,7 +939,7 @@ async function sendMsg(){
     if(!apiKey){
       hideThinking();
       const c2=gC();
-      c2[S.convId].messages.push({role:'assistant',content:'🔑 **Clé API manquante**\n\nContacte le Owner pour activer l\'IA.',ts:Date.now(),id:'mkey'+Date.now()});
+      c2[S.convId].messages.push({role:'assistant',content:'🐧 IA indisponible pour le moment. Réessaie dans quelques secondes.',ts:Date.now(),id:'mkey'+Date.now()});
       sC(c2); S.loading=false; document.getElementById('send-btn').disabled=false; renderMsgs(); return;
     }
 
@@ -907,17 +964,17 @@ async function sendMsg(){
       });
       data = await res.json();
     } catch(fetchErr){
-      throw new Error('Connexion impossible au serveur Groq.\nVérifiez votre connexion internet ou désactivez un éventuel bloqueur/VPN.\n(' + fetchErr.message + ')');
+      throw new Error('network');
     }
 
     if(data.error){
-      if(res.status===401) throw new Error('Clé API invalide ou expirée.\nLe Owner doit la corriger dans Panel Owner → Paramètres.');
-      if(res.status===429) throw new Error('Trop de requêtes envoyées. Patientez quelques secondes.');
-      throw new Error(data.error.message||'Erreur inconnue ('+res.status+')');
+      if(res.status===401||res.status===403) throw new Error('auth');
+      if(res.status===429) throw new Error('ratelimit');
+      throw new Error('api');
     }
 
     const reply = data.choices?.[0]?.message?.content;
-    if(!reply) throw new Error('Réponse vide reçue de l\'API.');
+    if(!reply) throw new Error('empty');
 
     hideThinking();
     const c2=gC();
@@ -926,12 +983,16 @@ async function sendMsg(){
 
   } catch(err){
     hideThinking();
+    const msgs={
+      network:'🐧 Connexion impossible. Vérifie ta connexion internet.',
+      auth:'🐧 IA indisponible pour le moment. Réessaie plus tard.',
+      ratelimit:'🐧 Trop de messages envoyés. Attends quelques secondes.',
+      api:'🐧 Le service IA est temporairement indisponible.',
+      empty:'🐧 Pas de réponse reçue. Réessaie dans quelques secondes.',
+    };
+    const msg=msgs[err.message]||'🐧 IA indisponible pour le moment. Réessaie dans quelques secondes.';
     const c2=gC();
-    c2[S.convId].messages.push({
-      role:'assistant',
-      content:'⚠️ **Erreur**\n\n' + err.message,
-      ts:Date.now(), id:'merr'+Date.now()
-    });
+    c2[S.convId].messages.push({role:'assistant',content:msg,ts:Date.now(),id:'merr'+Date.now()});
     sC(c2);
   }
   S.loading=false;document.getElementById('send-btn').disabled=false;
@@ -1204,10 +1265,83 @@ function openModal(type,extra){
       <button class="btn-p" onclick="saveNewUser()">Créer</button>`;
   }
 
+  else if(type==='settings'){
+    title.textContent='⚙️ Paramètres';
+    const u=S.user;
+    body.innerHTML=`
+      <div style="background:var(--bg3);border-radius:12px;padding:14px;margin-bottom:16px;display:flex;align-items:center;gap:12px">
+        <div class="av" style="width:44px;height:44px;font-size:18px;background:${u.color||'#60A5FA'};flex-shrink:0">${u.name[0].toUpperCase()}</div>
+        <div>
+          <div style="font-weight:700;font-size:15px">${esc(u.name)}</div>
+          <div style="font-size:12px;color:var(--text2)">${esc(u.email)}</div>
+          <span class="badge ${u.role==='owner'?'b-owner':'b-user'}" style="margin-top:4px;display:inline-block">${u.role==='owner'?'Owner':'Utilisateur'}</span>
+        </div>
+      </div>
+      <div class="ff"><label>Changer le pseudo</label>
+        <input type="text" id="set-name" value="${esc(u.name)}" placeholder="Nouveau pseudo">
+      </div>
+      <div class="ff"><label>Couleur de l'avatar</label>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:4px">
+          ${['#60A5FA','#34D399','#A78BFA','#F472B6','#FB923C','#22D3EE','#FBBF24','#F87171'].map(c=>
+            `<div onclick="document.getElementById('set-color').value='${c}';document.querySelectorAll('.color-pick').forEach(x=>x.style.outline='none');this.style.outline='2px solid white'"
+              class="color-pick" style="width:28px;height:28px;border-radius:50%;background:${c};cursor:pointer;outline:${u.color===c?'2px solid white':'none'}"></div>`
+          ).join('')}
+          <input type="hidden" id="set-color" value="${u.color||'#60A5FA'}">
+        </div>
+      </div>
+      <hr style="border:none;border-top:1px solid var(--border);margin:14px 0">
+      <div class="ff"><label style="color:var(--red)">Zone danger</label>
+        <button class="btn-d" style="width:100%;justify-content:center;margin-top:6px" onclick="clearMyConvs()">🗑️ Effacer toutes mes conversations</button>
+      </div>`;
+    foot.innerHTML=`<button class="btn-g" onclick="closeModal()">Fermer</button>
+      <button class="btn-p" onclick="saveSettings()">💾 Sauvegarder</button>`;
+  }
+
+  else if(type==='switchAccount'){
+    title.textContent='🔄 Changer de compte';
+    const known=kv('known_accounts')||[];
+    const others=known.filter(x=>x.id!==S.user?.id);
+    body.innerHTML=`
+      <p style="font-size:13px;color:var(--text2);margin-bottom:14px">Comptes disponibles sur cet appareil :</p>
+      ${others.length===0
+        ? `<div style="text-align:center;padding:20px;color:var(--text3);font-size:13px">Aucun autre compte enregistré.<br>Utilise "Ajouter un compte" pour te connecter à un autre email.</div>`
+        : others.map(a=>`
+          <div style="display:flex;align-items:center;gap:10px;padding:10px;border:1px solid var(--border);border-radius:var(--r);margin-bottom:8px;cursor:pointer;transition:background .15s" onclick="switchToAccount('${a.id}')" onmouseover="this.style.background='var(--bg3)'" onmouseout="this.style.background=''">
+            <div class="av" style="width:34px;height:34px;font-size:14px;background:${a.color||'#60A5FA'};flex-shrink:0">${a.name[0].toUpperCase()}</div>
+            <div style="flex:1;min-width:0">
+              <div style="font-weight:600;font-size:13px">${esc(a.name)}</div>
+              <div style="font-size:11px;color:var(--text2)">${esc(a.email)}</div>
+            </div>
+            <span class="badge ${a.role==='owner'?'b-owner':'b-user'}">${a.role==='owner'?'Owner':'User'}</span>
+          </div>`).join('')}
+      <hr style="border:none;border-top:1px solid var(--border);margin:12px 0">
+      <button class="btn-p" style="width:100%;justify-content:center" onclick="closeModal();doLogout()">➕ Se connecter avec un autre compte</button>`;
+    foot.innerHTML=`<button class="btn-g" onclick="closeModal()">Fermer</button>`;
+  }
+
   overlay.classList.add('show');
 }
 
 function closeModal(){document.getElementById('modal').classList.remove('show');}
+
+function saveSettings(){
+  const name=(document.getElementById('set-name')?.value||'').trim();
+  const color=document.getElementById('set-color')?.value||S.user.color;
+  if(!name){alert('Le pseudo ne peut pas être vide.');return}
+  const users=gU();
+  const idx=users.findIndex(x=>x.id===S.user.id);
+  if(idx>=0){users[idx].name=name;users[idx].color=color;sU(users);}
+  S.user.name=name; S.user.color=color;
+  saveSession(S.user); saveKnownAccount(S.user);
+  initApp(); closeModal();
+}
+
+function clearMyConvs(){
+  if(!confirm('Effacer toutes tes conversations ? Cette action est irréversible.')) return;
+  sC({});
+  S.convId=null;
+  renderConvList(); renderMsgs(); closeModal();
+}
 
 function saveRename(id){
   const v=document.getElementById('rn-inp')?.value.trim();
