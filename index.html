@@ -4,6 +4,10 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Pinguin IA — Intelligence Artificielle</title>
+<!-- Firebase SDK (compat) -->
+<script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-auth-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-database-compat.js"></script>
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
 :root{
@@ -118,10 +122,11 @@ button{cursor:pointer;border:none;border-radius:var(--r);font-size:13px;font-fam
 .sb-foot{border-top:1px solid var(--border);padding:10px 12px;flex-shrink:0}
 .sb-owner-btn{width:100%;text-align:left;padding:8px 10px;margin-bottom:6px;font-size:12px;background:rgba(255,107,157,.06);border:1px solid rgba(255,107,157,.2);color:var(--accent);border-radius:var(--r)}
 .sb-owner-btn:hover{background:rgba(255,107,157,.12);border-color:rgba(255,107,157,.35)}
-.pm-btn{width:100%;text-align:left;padding:8px 12px;font-size:13px;color:var(--text);background:transparent;border:none;border-radius:var(--r);display:block;margin-bottom:1px}
-.pm-btn:hover{background:var(--bg3);color:var(--text)}
+.pm-btn{width:100%;text-align:left;padding:8px 12px;font-size:13px;color:var(--text);background:transparent;border:none;border-radius:var(--r);display:block;margin-bottom:1px;transition:background .12s}
+.pm-btn:hover{background:rgba(255,255,255,.07);color:var(--text)}
 .pm-btn-danger{color:var(--red)!important}
-.pm-btn-danger:hover{background:rgba(248,113,113,.1)!important}
+.pm-btn-danger:hover{background:rgba(248,113,113,.12)!important}
+@keyframes pm-in{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:translateY(0)}}
 .sb-user-row{display:flex;align-items:center;gap:8px;padding:6px 2px}
 .av{display:flex;align-items:center;justify-content:center;border-radius:50%;font-weight:700;color:#fff;flex-shrink:0}
 .sb-uname{font-size:12px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;flex:1;min-width:0}
@@ -331,7 +336,7 @@ tr:hover td{background:rgba(255,255,255,.015)}
     <div class="sb-foot">
       <button class="sb-owner-btn" id="owner-panel-btn" style="display:none" onclick="showPanel()">👑 Panel Owner</button>
       <!-- PROFILE MENU POPUP -->
-      <div id="profile-menu" style="display:none;position:absolute;bottom:72px;left:10px;right:10px;background:var(--card2);border:1px solid var(--border2);border-radius:14px;padding:6px;z-index:200;box-shadow:0 8px 30px rgba(0,0,0,.5)">
+      <div id="profile-menu" style="display:none;position:absolute;bottom:78px;left:12px;width:240px;background:var(--card2);border:1px solid var(--border2);border-radius:14px;padding:5px;z-index:200;box-shadow:0 8px 32px rgba(0,0,0,.6);animation:pm-in .15s ease">
         <div style="padding:10px 12px 8px;border-bottom:1px solid var(--border);margin-bottom:4px">
           <div style="font-size:13px;font-weight:700" id="pm-name">—</div>
           <div style="font-size:11px;color:var(--text3)" id="pm-email">—</div>
@@ -399,17 +404,57 @@ tr:hover td{background:rgba(255,255,255,.015)}
 
 const _OE = 'naelpoupartraigade@gmail.com';
 const _OP = 'ApexOwner_2026!';
-// Appel direct — Anthropic supporte officiellement les appels navigateur avec ce header
 const API_URL = 'https://api.groq.com/openai/v1/chat/completions';
 const GROQ_MODEL = 'llama-3.3-70b-versatile';
 
-// ── CLÉ API EMBARQUÉE (Groq gratuit) ──
-// La clé est intégrée pour que tous les visiteurs puissent utiliser l'IA sans configuration.
-const _GK = ['gsk_7yfX1iqlivscgAfuu8QeWGd', 'yb3FYTVTzWZJEugQYsBoQ9CrWm5Ig'].join('');
-function getApiKey(){ return (kv('apikey')||_GK).trim(); }
+// ════════════════════════════════════════════════
+//  FIREBASE CONFIG — À REMPLIR
+//  1. console.firebase.google.com → Créer projet
+//  2. Authentication → Email/Password → Activer
+//  3. Realtime Database → Créer → Test mode
+//  4. Paramètres → Apps Web → Copier config ici
+// ════════════════════════════════════════════════
+const FIREBASE_CONFIG = {
+  apiKey: "REMPLACEZ_PAR_VOTRE_apiKey",
+  authDomain: "VOTRE_PROJET.firebaseapp.com",
+  databaseURL: "https://VOTRE_PROJET-default-rtdb.firebaseio.com",
+  projectId: "VOTRE_PROJET",
+  storageBucket: "VOTRE_PROJET.appspot.com",
+  messagingSenderId: "VOTRE_SENDER_ID",
+  appId: "VOTRE_APP_ID"
+};
+// ════════════════════════════════════════════════
 
-// ── RATE LIMIT (anti-spam) ──
-const _RL={msgs:[],max:15,window:60000}; // max 15 messages par minute
+let fbDB=null, fbAuth=null, FB=false;
+try{
+  if(FIREBASE_CONFIG.apiKey && !FIREBASE_CONFIG.apiKey.startsWith('REMPLACEZ')){
+    firebase.initializeApp(FIREBASE_CONFIG);
+    fbDB=firebase.database();
+    fbAuth=firebase.auth();
+    fbAuth.setPersistence(firebase.auth.Auth.Persistence.LOCAL);
+    FB=true;
+    console.log('🐧 Firebase connecté');
+  }
+}catch(e){console.warn('Firebase non configuré.',e.message);}
+
+async function fbGet(path){try{if(!fbDB)return null;const s=await fbDB.ref(path).get();return s.exists()?s.val():null;}catch(e){return null;}}
+async function fbSet(path,val){try{if(fbDB)await fbDB.ref(path).set(val);}catch(e){}}
+async function fbUpdate(path,val){try{if(fbDB)await fbDB.ref(path).update(val);}catch(e){}}
+
+// Clé IA : stockée dans Firebase par le Owner, partagée avec tous
+let _cachedKey='';
+async function getApiKey(){
+  if(_cachedKey) return _cachedKey;
+  if(FB){const k=await fbGet('settings/groqKey');if(k){_cachedKey=k;return k;}}
+  return kv('apikey')||'';
+}
+async function setApiKey(k){
+  _cachedKey=k; kv('apikey',k);
+  if(FB) await fbSet('settings/groqKey',k);
+}
+
+// ── RATE LIMIT ──
+const _RL={msgs:[],max:15,window:60000};
 function checkRateLimit(){
   const now=Date.now();
   _RL.msgs=_RL.msgs.filter(t=>now-t<_RL.window);
@@ -625,22 +670,44 @@ function saveKnownAccount(u){
 function showErr(id,msg){const e=document.getElementById(id);e.textContent=msg;e.style.display='block'}
 function hideAuthErr(){['le','re'].forEach(id=>{const e=document.getElementById(id);if(e)e.style.display='none'});}
 
-function doLogin(){
+async function doLogin(){
   hideAuthErr();
   const email=document.getElementById('le-email').value.trim().toLowerCase();
   const pass=document.getElementById('le-pass').value;
   if(!email||!pass){showErr('le','Remplis tous les champs.');return}
+
+  // Tentative Firebase Auth
+  if(FB){
+    try{
+      const cred=await fbAuth.signInWithEmailAndPassword(email,pass);
+      const profile=await fbGet('users/'+cred.user.uid)||{};
+      const u={id:cred.user.uid,name:profile.name||email.split('@')[0],email,role:profile.role||'user',color:profile.color||'#60A5FA',joined:profile.joined||new Date().toISOString().split('T')[0],convs:[],mem:{}};
+      if(email.toLowerCase()===_OE.toLowerCase()) u.role='owner';
+      S.user=u; saveSession(u); saveKnownAccount(u);
+      document.getElementById('auth').style.display='none';
+      document.getElementById('app').style.display='flex';
+      initApp(); return;
+    }catch(e){
+      const msg={
+        'auth/user-not-found':'Email introuvable. Crée un compte.',
+        'auth/wrong-password':'Mot de passe incorrect.',
+        'auth/invalid-email':'Email invalide.',
+        'auth/invalid-credential':'Email ou mot de passe incorrect.',
+      }[e.code]||'Connexion échouée. Réessaie.';
+      showErr('le',msg); return;
+    }
+  }
+
+  // Fallback local
   const u=gU().find(x=>x.email.toLowerCase()===email&&x.password===pass);
   if(!u){showErr('le','Email ou mot de passe incorrect.');return}
-  S.user={...u};
-  saveSession(u); saveKnownAccount(u);
-  aLog(u.email,'Connexion','auth');
+  S.user={...u}; saveSession(u); saveKnownAccount(u);
   document.getElementById('auth').style.display='none';
   document.getElementById('app').style.display='flex';
   initApp();
 }
 
-function doRegister(){
+async function doRegister(){
   hideAuthErr();
   const name=document.getElementById('re-name').value.trim();
   const email=document.getElementById('re-email').value.trim().toLowerCase();
@@ -648,16 +715,38 @@ function doRegister(){
   if(!name||!email||!pass){showErr('re','Tous les champs sont requis.');return}
   if(!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)){showErr('re','Adresse email invalide.');return}
   if(pass.length<6){showErr('re','Mot de passe trop court (min. 6 caractères).');return}
-  const users=gU();
-  if(users.find(x=>x.email.toLowerCase()===email)){
-    showErr('re','Cet email est déjà utilisé. Connecte-toi avec ce compte.');return;
-  }
+
   const color=['#60A5FA','#34D399','#A78BFA','#F472B6','#FB923C'][Math.floor(Math.random()*5)];
-  const nu={id:'u'+Date.now(),name,email,password:pass,role:'user',color,joined:new Date().toISOString().split('T')[0],convs:[],mem:{}};
+  const role=email===_OE?'owner':'user';
+
+  // Firebase Auth
+  if(FB){
+    try{
+      const cred=await fbAuth.createUserWithEmailAndPassword(email,pass);
+      await cred.user.updateProfile({displayName:name});
+      const profile={name,email,role,color,joined:new Date().toISOString().split('T')[0],convCount:0};
+      await fbSet('users/'+cred.user.uid,profile);
+      const u={id:cred.user.uid,...profile,convs:[],mem:{}};
+      S.user=u; saveSession(u); saveKnownAccount(u);
+      document.getElementById('auth').style.display='none';
+      document.getElementById('app').style.display='flex';
+      initApp(); return;
+    }catch(e){
+      const msg={
+        'auth/email-already-in-use':'Cet email est déjà utilisé. Connecte-toi avec ce compte.',
+        'auth/weak-password':'Mot de passe trop faible (min. 6 caractères).',
+        'auth/invalid-email':'Adresse email invalide.',
+      }[e.code]||'Inscription échouée : '+e.message;
+      showErr('re',msg); return;
+    }
+  }
+
+  // Fallback local
+  const users=gU();
+  if(users.find(x=>x.email.toLowerCase()===email)){showErr('re','Cet email est déjà utilisé. Connecte-toi avec ce compte.');return;}
+  const nu={id:'u'+Date.now(),name,email,password:pass,role,color,joined:new Date().toISOString().split('T')[0],convs:[],mem:{}};
   users.push(nu);sU(users);
-  aLog(email,'Inscription','auth');
-  S.user={...nu};
-  saveSession(nu); saveKnownAccount(nu);
+  S.user={...nu}; saveSession(nu); saveKnownAccount(nu);
   document.getElementById('auth').style.display='none';
   document.getElementById('app').style.display='flex';
   initApp();
@@ -666,7 +755,8 @@ function doRegister(){
 function doLogout(){
   if(S.user) aLog(S.user.email,'Déconnexion','auth');
   S.user=null;S.convId=null;S.panel=false;
-  clearSession();
+  clearSession(); _cachedKey='';
+  if(FB) fbAuth.signOut().catch(()=>{});
   document.getElementById('app').style.display='none';
   document.getElementById('landing').style.display='flex';
 }
@@ -935,11 +1025,11 @@ async function sendMsg(){
   }
 
   try{
-    const apiKey = getApiKey();
+    const apiKey = await getApiKey();
     if(!apiKey){
       hideThinking();
       const c2=gC();
-      c2[S.convId].messages.push({role:'assistant',content:'🐧 IA indisponible pour le moment. Réessaie dans quelques secondes.',ts:Date.now(),id:'mkey'+Date.now()});
+      c2[S.convId].messages.push({role:'assistant',content:'🐧 IA indisponible pour le moment. Le Owner doit configurer la clé API dans le Panel Owner → Paramètres.',ts:Date.now(),id:'mkey'+Date.now()});
       sC(c2); S.loading=false; document.getElementById('send-btn').disabled=false; renderMsgs(); return;
     }
 
@@ -1062,23 +1152,38 @@ function renderPanel(){
   }
 
   else if(S.ptab==='utilisateurs'){
-    body.innerHTML=`<div class="ps"><h3>Utilisateurs (${users.length})
+    body.innerHTML=`<div class="ps"><h3>Utilisateurs <span id="user-count" style="color:var(--text3)">(chargement…)</span>
         <button class="btn-p btn-sm" onclick="openModal('addUser')">＋ Ajouter</button>
       </h3>
-      <table><thead><tr><th>Utilisateur</th><th>Email</th><th>Rôle</th><th>Inscription</th><th>Conversations</th><th>Actions</th></tr></thead><tbody>
-        ${users.map(u=>`<tr>
+      <div id="users-table-wrap" style="color:var(--text2);font-size:13px;padding:20px 0;text-align:center">🐧 Chargement des utilisateurs…</div>
+    </div>`;
+    // Charge depuis Firebase si disponible, sinon localStorage
+    (async()=>{
+      let allUsers=[];
+      if(FB){
+        const fbUsers=await fbGet('users')||{};
+        allUsers=Object.entries(fbUsers).map(([id,u])=>({id,...u}));
+      } else {
+        allUsers=gU();
+      }
+      const count=allUsers.length;
+      const uc=document.getElementById('user-count');
+      if(uc) uc.textContent=`(${count})`;
+      const wrap=document.getElementById('users-table-wrap');
+      if(!wrap) return;
+      if(allUsers.length===0){wrap.textContent='Aucun utilisateur trouvé.';return;}
+      wrap.innerHTML=`<table><thead><tr><th>Utilisateur</th><th>Email</th><th>Rôle</th><th>Inscription</th><th>Actions</th></tr></thead><tbody>
+        ${allUsers.map(u=>`<tr>
           <td><div style="display:flex;align-items:center;gap:8px">
-            <div class="av" style="width:26px;height:26px;font-size:11px;background:${u.color||'#2B8FFF'}">${u.name[0].toUpperCase()}</div>
-            <span style="font-weight:500">${esc(u.name)}</span></div></td>
-          <td style="color:var(--text2)">${esc(u.email)}</td>
+            <div class="av" style="width:26px;height:26px;font-size:11px;background:${u.color||'#2B8FFF'}">${(u.name||'?')[0].toUpperCase()}</div>
+            <span style="font-weight:500">${esc(u.name||'—')}</span></div></td>
+          <td style="color:var(--text2);font-size:12px">${esc(u.email||'—')}</td>
           <td><span class="badge ${u.role==='owner'?'b-owner':'b-user'}">${u.role==='owner'?'Owner':'User'}</span></td>
-          <td style="color:var(--text3)">${u.joined||'—'}</td>
-          <td style="color:var(--text2)">${(u.convs||[]).length}</td>
-          <td style="display:flex;gap:4px">
-            ${u.role!=='owner'?`<button class="btn-d btn-sm" onclick="delUser('${u.id}')">Supprimer</button>`:'<span style="color:var(--text3);font-size:12px">—</span>'}
-          </td>
-        </tr>`).join('')}
-      </tbody></table></div>`;
+          <td style="color:var(--text3);font-size:12px">${u.joined||'—'}</td>
+          <td>${u.role!=='owner'?`<button class="btn-d btn-sm" onclick="delUser('${u.id}')">Supprimer</button>`:'<span style="color:var(--text3)">—</span>'}
+          </td></tr>`).join('')}
+      </tbody></table>`;
+    })();
   }
 
   else if(S.ptab==='prompts'){
@@ -1152,22 +1257,23 @@ function renderPanel(){
         </div>
         <button class="btn-p" style="margin-top:6px">Sauvegarder</button>
       </div>
-      <div class="ps">
-        <h3>🔑 Clé API Groq ${getApiKey()?'<span style="color:var(--green);font-size:12px;font-weight:400">✓ Configurée</span>':'<span style="color:var(--red);font-size:12px;font-weight:400">✗ Non configurée</span>'}</h3>
-        <div style="background:rgba(123,111,255,.07);border:1px solid rgba(123,111,255,.15);border-radius:var(--r);padding:12px 14px;margin-bottom:14px;font-size:12px;color:var(--text2);line-height:1.6">
-          Clé gratuite sur <a href="https://console.groq.com/keys" target="_blank" style="color:var(--blue)">console.groq.com/keys</a>. Elle est stockée uniquement dans ce navigateur.
+      <div class="ps" id="ak-panel-section">
+        <h3>🔑 Clé API Groq <span id="ak-status" style="font-size:12px;font-weight:400;color:var(--text3)">Vérification…</span></h3>
+        <div style="background:rgba(43,143,255,.07);border:1px solid rgba(43,143,255,.15);border-radius:var(--r);padding:12px 14px;margin-bottom:14px;font-size:12px;color:var(--text2);line-height:1.6">
+          Clé gratuite sur <a href="https://console.groq.com/keys" target="_blank" style="color:var(--blue)">console.groq.com/keys</a>.<br>
+          ${FB?'✅ <strong>Clé stockée dans Firebase</strong> — partagée avec tous les utilisateurs automatiquement.':'⚠️ Firebase non configuré — clé locale uniquement.'}
         </div>
-        <div class="ff"><label>Clé API (commence par gsk_)</label>
+        <div class="ff"><label>Clé API Groq (commence par gsk_)</label>
           <div style="display:flex;gap:8px">
-            <input type="password" id="ak-panel-inp" placeholder="gsk_..." value="${getApiKey()}" style="flex:1">
+            <input type="password" id="ak-panel-inp" placeholder="gsk_..." style="flex:1">
             <button class="btn-g" style="flex-shrink:0" onclick="const i=document.getElementById('ak-panel-inp');i.type=i.type==='password'?'text':'password'">👁</button>
           </div>
         </div>
         <div id="ak-panel-result" style="display:none;border-radius:var(--r);padding:9px 13px;margin-bottom:10px;font-size:13px"></div>
         <div style="display:flex;gap:8px;flex-wrap:wrap">
           <button class="btn-g" onclick="testApiKeyPanel()">🧪 Tester</button>
-          <button class="btn-p" onclick="saveApiKeyPanel()">💾 Sauvegarder la clé</button>
-          ${getApiKey()?`<button class="btn-d" onclick="kv('apikey','');renderPanel()">🗑 Supprimer</button>`:''}
+          <button class="btn-p" onclick="saveApiKeyPanel()">💾 Sauvegarder${FB?' dans Firebase':''}</button>
+          <button class="btn-d" onclick="setApiKey('').then(()=>renderPanel())">🗑 Supprimer</button>
         </div>
       </div>
       <div class="ps">
@@ -1384,12 +1490,13 @@ function saveNewSite(){
   closeModal();renderPanel();
 }
 
-function saveApiKeyPanel(){
+async function saveApiKeyPanel(){
   const k=(document.getElementById('ak-panel-inp')?.value||'').trim();
   if(!k){alert('Entrez votre clé API.');return}
   if(!k.startsWith('gsk_')){alert('Clé invalide — une clé Groq commence par gsk_');return}
-  kv('apikey',k);
-  renderPanel();
+  await setApiKey(k);
+  const r=document.getElementById('ak-panel-result');
+  if(r){r.style.display='block';r.style.background='rgba(74,222,128,.08)';r.style.border='1px solid rgba(74,222,128,.2)';r.style.color='var(--green)';r.textContent=FB?'✅ Clé sauvegardée dans Firebase — tous les utilisateurs peuvent maintenant utiliser l\'IA !':'✅ Clé sauvegardée localement.';}
 }
 
 async function testApiKeyPanel(){
@@ -1430,33 +1537,47 @@ function saveNewUser(){
 }
 
 // ── START ──
-// Force mise à jour des prompts (version 2)
 if(kv('init')!==2){ kv('init',null); }
 initData();
-// Force le compte Owner correct à chaque chargement (écrase toute donnée ancienne)
-(function enforceOwner(){
-  let users = gU();
-  const ownerEmail = _OE.toLowerCase();
-  users = users.filter(u => !(u.email.toLowerCase()===ownerEmail || u.id==='owner'));
-  const existing = users.find(u=>u.id==='owner'||u.email.toLowerCase()===ownerEmail);
-  users.unshift({
-    id:'owner', name:'ZFRnaelYT', email:_OE, password:_OP, role:'owner', color:'#22D3EE',
-    joined:'2025-01-01', convs:existing?.convs||[], mem:existing?.mem||{}
-  });
-  sU(users);
-})();
 
-// ── RESTAURATION DE SESSION AU CHARGEMENT ──
-(function autoLogin(){
-  const u = restoreSession();
-  if(u){
-    S.user = {...u};
-    document.getElementById('landing').style.display = 'none';
-    document.getElementById('auth').style.display = 'none';
-    document.getElementById('app').style.display = 'flex';
-    initApp();
-  }
-})();
+// ── RESTAURATION DE SESSION ──
+// Si Firebase est configuré : Firebase Auth gère la session automatiquement
+// Sinon : fallback localStorage
+if(FB){
+  // Firebase Auth listener — se déclenche au chargement si l'utilisateur est déjà connecté
+  fbAuth.onAuthStateChanged(async(fbUser)=>{
+    if(fbUser && !S.user){
+      const profile=await fbGet('users/'+fbUser.uid)||{};
+      const u={
+        id:fbUser.uid,
+        name:profile.name||fbUser.displayName||fbUser.email.split('@')[0],
+        email:fbUser.email,
+        role:fbUser.email.toLowerCase()===_OE.toLowerCase()?'owner':(profile.role||'user'),
+        color:profile.color||'#60A5FA',
+        joined:profile.joined||new Date().toISOString().split('T')[0],
+        convs:[],mem:{}
+      };
+      S.user=u;
+      saveSession(u); saveKnownAccount(u);
+      document.getElementById('landing').style.display='none';
+      document.getElementById('auth').style.display='none';
+      document.getElementById('app').style.display='flex';
+      initApp();
+    }
+  });
+} else {
+  // Fallback : localStorage session
+  (function autoLogin(){
+    const u=restoreSession();
+    if(u){
+      S.user={...u};
+      document.getElementById('landing').style.display='none';
+      document.getElementById('auth').style.display='none';
+      document.getElementById('app').style.display='flex';
+      initApp();
+    }
+  })();
+}
 </script>
 </body>
 </html>
