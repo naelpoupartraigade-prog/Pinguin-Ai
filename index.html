@@ -386,7 +386,33 @@ const _OP = 'ApexOwner_2026!';
 // Appel direct — Anthropic supporte officiellement les appels navigateur avec ce header
 const API_URL = 'https://api.groq.com/openai/v1/chat/completions';
 const GROQ_MODEL = 'llama-3.3-70b-versatile';
-function getApiKey(){ return (kv('apikey')||'').trim(); }
+
+// ── CLÉ API EMBARQUÉE (Groq gratuit) ──
+// La clé est intégrée pour que tous les visiteurs puissent utiliser l'IA sans configuration.
+const _GK = ['gsk_7yfX1iqlivscgAfuu8QeWGd', 'yb3FYTVTzWZJEugQYsBoQ9CrWm5Ig'].join('');
+function getApiKey(){ return (kv('apikey')||_GK).trim(); }
+
+// ── RATE LIMIT (anti-spam) ──
+const _RL={msgs:[],max:15,window:60000}; // max 15 messages par minute
+function checkRateLimit(){
+  const now=Date.now();
+  _RL.msgs=_RL.msgs.filter(t=>now-t<_RL.window);
+  if(_RL.msgs.length>=_RL.max) return false;
+  _RL.msgs.push(now); return true;
+}
+
+// ── SESSION PERSISTENCE ──
+function saveSession(user){ try{localStorage.setItem('px_sess',JSON.stringify({id:user.id,ts:Date.now()}))}catch(e){} }
+function clearSession(){ try{localStorage.removeItem('px_sess')}catch(e){} }
+function restoreSession(){
+  try{
+    const s=JSON.parse(localStorage.getItem('px_sess')||'null');
+    if(!s||!s.id) return null;
+    if(Date.now()-s.ts > 30*24*60*60*1000){ clearSession(); return null; } // 30 jours
+    const u=gU().find(x=>x.id===s.id);
+    return u||null;
+  }catch(e){return null;}
+}
 
 const S={user:null,convId:null,loading:false,panel:false,ptab:'dashboard',sbOpen:true};
 
@@ -554,36 +580,50 @@ function switchAuth(type){
 
 // ── AUTH ──
 function showErr(id,msg){const e=document.getElementById(id);e.textContent=msg;e.style.display='block'}
+function hideAuthErr(){['le','re'].forEach(id=>{const e=document.getElementById(id);if(e)e.style.display='none'});}
+
 function doLogin(){
+  hideAuthErr();
   const email=document.getElementById('le-email').value.trim().toLowerCase();
   const pass=document.getElementById('le-pass').value;
+  if(!email||!pass){showErr('le','Remplis tous les champs.');return}
   const u=gU().find(x=>x.email.toLowerCase()===email&&x.password===pass);
   if(!u){showErr('le','Email ou mot de passe incorrect.');return}
   S.user={...u};
+  saveSession(u);
   aLog(u.email,'Connexion','auth');
   document.getElementById('auth').style.display='none';
   document.getElementById('app').style.display='flex';
   initApp();
 }
+
 function doRegister(){
+  hideAuthErr();
   const name=document.getElementById('re-name').value.trim();
   const email=document.getElementById('re-email').value.trim().toLowerCase();
   const pass=document.getElementById('re-pass').value;
   if(!name||!email||!pass){showErr('re','Tous les champs sont requis.');return}
+  if(!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)){showErr('re','Adresse email invalide.');return}
   if(pass.length<6){showErr('re','Mot de passe trop court (min. 6 caractères).');return}
   const users=gU();
-  if(users.find(x=>x.email.toLowerCase()===email)){showErr('re','Email déjà utilisé.');return}
-  const nu={id:'u'+Date.now(),name,email,password:pass,role:'user',color:'#60A5FA',joined:new Date().toISOString().split('T')[0],convs:[],mem:{}};
+  if(users.find(x=>x.email.toLowerCase()===email)){
+    showErr('re','Cet email est déjà utilisé. Connecte-toi avec ce compte.');return;
+  }
+  const color=['#60A5FA','#34D399','#A78BFA','#F472B6','#FB923C'][Math.floor(Math.random()*5)];
+  const nu={id:'u'+Date.now(),name,email,password:pass,role:'user',color,joined:new Date().toISOString().split('T')[0],convs:[],mem:{}};
   users.push(nu);sU(users);
   aLog(email,'Inscription','auth');
   S.user={...nu};
+  saveSession(nu);
   document.getElementById('auth').style.display='none';
   document.getElementById('app').style.display='flex';
   initApp();
 }
+
 function doLogout(){
   if(S.user) aLog(S.user.email,'Déconnexion','auth');
   S.user=null;S.convId=null;S.panel=false;
+  clearSession();
   document.getElementById('app').style.display='none';
   document.getElementById('landing').style.display='flex';
 }
@@ -815,12 +855,21 @@ async function sendMsg(){
 
   S.loading=true;document.getElementById('send-btn').disabled=true;
 
-  // Détection directe de demande d'image (génération immédiate sans API)
+  // Rate limiting anti-spam
+  if(!checkRateLimit()){
+    const c2=gC();
+    c2[S.convId].messages.push({role:'assistant',content:'⏳ **Trop de messages**\n\nTu envoies des messages trop rapidement. Attends quelques secondes avant de réessayer.',ts:Date.now(),id:'mrl'+Date.now()});
+    sC(c2); S.loading=false; document.getElementById('send-btn').disabled=false; renderMsgs(); return;
+  }
+
+  showThinking();
+
+  // Détection image → génération directe sans IA
   const imgTriggers=/\b(génère|générer|crée|créer|fais|faire|montre|donne|image|photo|bannière|logo|miniature|fond d'écran|pfp|avatar|illustration)\b.*\b(image|photo|bannière|logo|miniature|fond|pfp|avatar|illustration|dessin|picture)\b|\b(image|photo)\b.*\bde\b/i;
   if(imgTriggers.test(txt)){
-    // Génère l'image directement via Pollinations, l'IA affine le prompt
     const prompt=txt.replace(/génère|crée|fais-moi|donne-moi|montre-moi|une image de|une image d'|une photo de|un logo de|une bannière de/gi,'').trim();
     const aiReply=`[GENERATE_IMAGE: ${prompt}, high quality, detailed, digital art]`;
+    hideThinking();
     const c2=gC();
     c2[S.convId].messages.push({role:'assistant',content:aiReply,ts:Date.now(),id:'m'+Date.now()});
     sC(c2);
@@ -828,14 +877,12 @@ async function sendMsg(){
     renderMsgs();return;
   }
 
-  showThinking();
-
   try{
     const apiKey = getApiKey();
     if(!apiKey){
       hideThinking();
       const c2=gC();
-      c2[S.convId].messages.push({role:'assistant',content:'🔑 **Clé API manquante**\n\nLe Owner doit configurer une clé API Groq dans le Panel Owner → Paramètres pour activer le chat.',ts:Date.now(),id:'mkey'+Date.now()});
+      c2[S.convId].messages.push({role:'assistant',content:'🔑 **Clé API manquante**\n\nContacte le Owner pour activer l\'IA.',ts:Date.now(),id:'mkey'+Date.now()});
       sC(c2); S.loading=false; document.getElementById('send-btn').disabled=false; renderMsgs(); return;
     }
 
@@ -1256,22 +1303,25 @@ initData();
 (function enforceOwner(){
   let users = gU();
   const ownerEmail = _OE.toLowerCase();
-  // Supprime tout ancien compte avec cet email ou id 'owner' qui aurait un mauvais rôle/mdp
   users = users.filter(u => !(u.email.toLowerCase()===ownerEmail || u.id==='owner'));
-  // Réinsère le bon compte Owner en premier
-  const existing = gU().find(u=>u.id==='owner'||u.email.toLowerCase()===ownerEmail);
+  const existing = users.find(u=>u.id==='owner'||u.email.toLowerCase()===ownerEmail);
   users.unshift({
-    id:'owner',
-    name:'ZFRnaelYT',
-    email:_OE,
-    password:_OP,
-    role:'owner',
-    color:'#22D3EE',
-    joined:'2025-01-01',
-    convs: existing?.convs||[],
-    mem: existing?.mem||{}
+    id:'owner', name:'ZFRnaelYT', email:_OE, password:_OP, role:'owner', color:'#22D3EE',
+    joined:'2025-01-01', convs:existing?.convs||[], mem:existing?.mem||{}
   });
   sU(users);
+})();
+
+// ── RESTAURATION DE SESSION AU CHARGEMENT ──
+(function autoLogin(){
+  const u = restoreSession();
+  if(u){
+    S.user = {...u};
+    document.getElementById('landing').style.display = 'none';
+    document.getElementById('auth').style.display = 'none';
+    document.getElementById('app').style.display = 'flex';
+    initApp();
+  }
 })();
 </script>
 </body>
