@@ -404,13 +404,44 @@ tr:hover td{background:rgba(255,255,255,.015)}
 
 const _OE = 'naelpoupartraigade@gmail.com';
 const _OP = 'ApexOwner_2026!';
-const API_URL = 'https://api.groq.com/openai/v1/chat/completions';
-const GROQ_MODEL = 'llama-3.3-70b-versatile';
+
+// ══════════════════════════════════════════════════════════
+//  WORKER URL — Cloudflare Worker (backend sécurisé)
+//  Voir worker.js pour les instructions de déploiement
+//  Remplacez par votre propre URL après déploiement
+// ══════════════════════════════════════════════════════════
+const WORKER_URL = 'https://pinguin-ia-proxy.naelyt.workers.dev';
+
+let _workerOk = null;
+async function checkWorkerStatus(){
+  if(_workerOk !== null) return _workerOk;
+  try{const r=await fetch(WORKER_URL+'/status');const d=await r.json();_workerOk=d.configured===true;}
+  catch(e){_workerOk=false;}
+  return _workerOk;
+}
+
+async function callAI(messages, systemPrompt){
+  const msgs=systemPrompt?[{role:'system',content:systemPrompt},...messages]:messages;
+  const r=await fetch(WORKER_URL+'/chat',{
+    method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({messages:msgs})
+  });
+  const data=await r.json();
+  if(data.error){
+    if(data.error==='not_configured'||data.error==='no_key') throw new Error('not_configured');
+    if(data.error==='rate_limit') throw new Error('ratelimit');
+    throw new Error('api');
+  }
+  const reply=data.choices?.[0]?.message?.content;
+  if(!reply) throw new Error('empty');
+  return reply;
+}
 
 // ════════════════════════════════════════════════
-//  FIREBASE CONFIG — À REMPLIR
+//  FIREBASE CONFIG — Pour les comptes utilisateurs
 //  1. console.firebase.google.com → Créer projet
 //  2. Authentication → Email/Password → Activer
+//     Puis aussi activer "Vérification email"
 //  3. Realtime Database → Créer → Test mode
 //  4. Paramètres → Apps Web → Copier config ici
 // ════════════════════════════════════════════════
@@ -441,20 +472,8 @@ async function fbGet(path){try{if(!fbDB)return null;const s=await fbDB.ref(path)
 async function fbSet(path,val){try{if(fbDB)await fbDB.ref(path).set(val);}catch(e){}}
 async function fbUpdate(path,val){try{if(fbDB)await fbDB.ref(path).update(val);}catch(e){}}
 
-// Clé IA : stockée dans Firebase par le Owner, partagée avec tous
-let _cachedKey='';
-async function getApiKey(){
-  if(_cachedKey) return _cachedKey;
-  if(FB){const k=await fbGet('settings/groqKey');if(k){_cachedKey=k;return k;}}
-  return kv('apikey')||'';
-}
-async function setApiKey(k){
-  _cachedKey=k; kv('apikey',k);
-  if(FB) await fbSet('settings/groqKey',k);
-}
-
 // ── RATE LIMIT ──
-const _RL={msgs:[],max:15,window:60000};
+const _RL={msgs:[],max:20,window:60000};
 function checkRateLimit(){
   const now=Date.now();
   _RL.msgs=_RL.msgs.filter(t=>now-t<_RL.window);
@@ -724,13 +743,27 @@ async function doRegister(){
     try{
       const cred=await fbAuth.createUserWithEmailAndPassword(email,pass);
       await cred.user.updateProfile({displayName:name});
-      const profile={name,email,role,color,joined:new Date().toISOString().split('T')[0],convCount:0};
+      // Envoi email de vérification
+      await cred.user.sendEmailVerification({url: window.location.href});
+      const profile={name,email,role,color,joined:new Date().toISOString().split('T')[0],convCount:0,emailVerified:false};
       await fbSet('users/'+cred.user.uid,profile);
       const u={id:cred.user.uid,...profile,convs:[],mem:{}};
       S.user=u; saveSession(u); saveKnownAccount(u);
       document.getElementById('auth').style.display='none';
       document.getElementById('app').style.display='flex';
-      initApp(); return;
+      initApp();
+      // Affiche un message de vérification email dans le chat
+      setTimeout(()=>{
+        if(!S.convId) newConv();
+        const c=gC();
+        if(c[S.convId]){
+          c[S.convId].messages.push({role:'assistant',
+            content:'📧 **Bienvenue '+name+' !**\n\nUn email de vérification a été envoyé à `'+email+'`.\n\nCliquez sur le lien dans cet email pour activer votre compte, puis revenez ici et rechargez la page.\n\nSans vérification, vous ne pourrez pas utiliser l\'IA.',
+            ts:Date.now(),id:'mwelcome'+Date.now()});
+          sC(c); renderMsgs();
+        }
+      },500);
+      return;
     }catch(e){
       const msg={
         'auth/email-already-in-use':'Cet email est déjà utilisé. Connecte-toi avec ce compte.',
@@ -741,10 +774,10 @@ async function doRegister(){
     }
   }
 
-  // Fallback local
+  // Fallback local (sans Firebase)
   const users=gU();
   if(users.find(x=>x.email.toLowerCase()===email)){showErr('re','Cet email est déjà utilisé. Connecte-toi avec ce compte.');return;}
-  const nu={id:'u'+Date.now(),name,email,password:pass,role,color,joined:new Date().toISOString().split('T')[0],convs:[],mem:{}};
+  const nu={id:'u'+Date.now(),name,email,password:pass,role,color,joined:new Date().toISOString().split('T')[0],convs:[],mem:{},emailVerified:true};
   users.push(nu);sU(users);
   S.user={...nu}; saveSession(nu); saveKnownAccount(nu);
   document.getElementById('auth').style.display='none';
@@ -1002,69 +1035,46 @@ async function sendMsg(){
 
   S.loading=true;document.getElementById('send-btn').disabled=true;
 
+  // Vérification email Firebase (si Firebase actif)
+  if(FB && fbAuth.currentUser && !fbAuth.currentUser.emailVerified && S.user.role!=='owner'){
+    const c2=gC();
+    c2[S.convId].messages.push({role:'assistant',
+      content:'📧 **Vérifie ton email avant d\'utiliser Pinguin IA.**\n\nUn email de vérification a été envoyé à `'+S.user.email+'`.\nClique sur le lien dans cet email, puis recharge la page.',
+      ts:Date.now(),id:'mverif'+Date.now()});
+    sC(c2); S.loading=false; document.getElementById('send-btn').disabled=false; renderMsgs(); return;
+  }
+
   // Rate limiting anti-spam
   if(!checkRateLimit()){
     const c2=gC();
-    c2[S.convId].messages.push({role:'assistant',content:'⏳ **Trop de messages**\n\nTu envoies des messages trop rapidement. Attends quelques secondes avant de réessayer.',ts:Date.now(),id:'mrl'+Date.now()});
+    c2[S.convId].messages.push({role:'assistant',content:'⏳ Trop de messages envoyés. Attends quelques secondes.',ts:Date.now(),id:'mrl'+Date.now()});
     sC(c2); S.loading=false; document.getElementById('send-btn').disabled=false; renderMsgs(); return;
   }
 
   showThinking();
 
-  // Détection image : ne se déclenche que si le message est clairement une demande d'image (>12 chars, mot-clé au début)
+  // Détection image
   const imgKeywords=/^(génère|générer|crée|créer|fais-moi|donne-moi|montre-moi|make|generate|create).{3,}.*(image|photo|bannière|logo|miniature|fond d'écran|pfp|avatar|illustration|picture|wallpaper|banner)/i;
   if(imgKeywords.test(txt) && txt.length > 12){
     const prompt=txt.replace(/génère|crée|fais-moi|donne-moi|montre-moi|une image de|une image d'|une photo de|un logo de|une bannière de/gi,'').trim();
-    const aiReply=`[GENERATE_IMAGE: ${prompt}, high quality, detailed, digital art]`;
     hideThinking();
     const c2=gC();
-    c2[S.convId].messages.push({role:'assistant',content:aiReply,ts:Date.now(),id:'m'+Date.now()});
-    sC(c2);
-    S.loading=false;document.getElementById('send-btn').disabled=false;
-    renderMsgs();return;
+    c2[S.convId].messages.push({role:'assistant',content:`[GENERATE_IMAGE: ${prompt}, high quality, detailed, digital art]`,ts:Date.now(),id:'m'+Date.now()});
+    sC(c2); S.loading=false; document.getElementById('send-btn').disabled=false; renderMsgs(); return;
   }
 
   try{
-    const apiKey = await getApiKey();
-    if(!apiKey){
-      hideThinking();
-      const c2=gC();
-      c2[S.convId].messages.push({role:'assistant',content:'🐧 IA indisponible pour le moment. Le Owner doit configurer la clé API dans le Panel Owner → Paramètres.',ts:Date.now(),id:'mkey'+Date.now()});
-      sC(c2); S.loading=false; document.getElementById('send-btn').disabled=false; renderMsgs(); return;
-    }
-
     const hist=(gC()[S.convId]?.messages||[]).slice(-20).map(m=>({role:m.role,content:m.content}));
     const sys=getSystemPrompt();
     const mem=S.user.mem||{};
     const memNote=Object.keys(mem).length?`\n\n[Mémoire: ${JSON.stringify(mem)}]`:'';
 
-    let res, data;
+    let reply;
     try{
-      res = await fetch(API_URL, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': 'Bearer ' + apiKey
-        },
-        body: JSON.stringify({
-          model: GROQ_MODEL,
-          max_tokens: 1500,
-          messages: [{role:'system',content:sys+memNote}, ...hist]
-        })
-      });
-      data = await res.json();
-    } catch(fetchErr){
-      throw new Error('network');
+      reply = await callAI(hist, sys+memNote);
+    }catch(fetchErr){
+      throw fetchErr.message ? fetchErr : new Error('network');
     }
-
-    if(data.error){
-      if(res.status===401||res.status===403) throw new Error('auth');
-      if(res.status===429) throw new Error('ratelimit');
-      throw new Error('api');
-    }
-
-    const reply = data.choices?.[0]?.message?.content;
-    if(!reply) throw new Error('empty');
 
     hideThinking();
     const c2=gC();
@@ -1074,7 +1084,8 @@ async function sendMsg(){
   } catch(err){
     hideThinking();
     const msgs={
-      network:'🐧 Connexion impossible. Vérifie ta connexion internet.',
+      not_configured:'🐧 IA indisponible pour le moment. Le Owner doit configurer le service IA.',
+      network:'🐧 Connexion impossible au serveur. Vérifie ta connexion internet.',
       auth:'🐧 IA indisponible pour le moment. Réessaie plus tard.',
       ratelimit:'🐧 Trop de messages envoyés. Attends quelques secondes.',
       api:'🐧 Le service IA est temporairement indisponible.',
@@ -1249,7 +1260,7 @@ function renderPanel(){
       <div class="ps"><h3>Paramètres généraux</h3>
         <div class="frow">
           <div class="ff"><label>Nom de la plateforme</label><input type="text" value="Pinguin IA"></div>
-          <div class="ff"><label>Modèle IA</label><select><option>claude-sonnet-4-6</option><option>claude-opus-4-6</option></select></div>
+          <div class="ff"><label>Modèle IA</label><select><option>llama-3.3-70b-versatile</option><option>llama-3.1-70b-versatile</option></select></div>
         </div>
         <div class="frow">
           <div class="ff"><label>Langue par défaut</label><input type="text" value="Français"></div>
@@ -1257,23 +1268,18 @@ function renderPanel(){
         </div>
         <button class="btn-p" style="margin-top:6px">Sauvegarder</button>
       </div>
-      <div class="ps" id="ak-panel-section">
-        <h3>🔑 Clé API Groq <span id="ak-status" style="font-size:12px;font-weight:400;color:var(--text3)">Vérification…</span></h3>
-        <div style="background:rgba(43,143,255,.07);border:1px solid rgba(43,143,255,.15);border-radius:var(--r);padding:12px 14px;margin-bottom:14px;font-size:12px;color:var(--text2);line-height:1.6">
-          Clé gratuite sur <a href="https://console.groq.com/keys" target="_blank" style="color:var(--blue)">console.groq.com/keys</a>.<br>
-          ${FB?'✅ <strong>Clé stockée dans Firebase</strong> — partagée avec tous les utilisateurs automatiquement.':'⚠️ Firebase non configuré — clé locale uniquement.'}
+      <div class="ps" id="worker-status-section">
+        <h3>🌐 Service IA — Cloudflare Worker <span id="worker-status-badge" style="font-size:12px;font-weight:400;color:var(--text3)">Vérification…</span></h3>
+        <div style="background:rgba(43,143,255,.07);border:1px solid rgba(43,143,255,.15);border-radius:var(--r);padding:12px 14px;margin-bottom:14px;font-size:12px;color:var(--text2);line-height:1.7">
+          <strong style="color:var(--text)">Architecture sécurisée :</strong><br>
+          La clé API Groq est stockée <strong>côté serveur</strong> dans le Cloudflare Worker.<br>
+          Elle n'est <strong>jamais visible</strong> dans le code frontend ni dans le navigateur.<br>
+          Tous les utilisateurs passent par le Worker pour utiliser l'IA.<br><br>
+          <strong>Worker URL :</strong> <code style="background:rgba(0,0,0,.3);padding:2px 6px;border-radius:4px;font-size:11px">${WORKER_URL}</code><br><br>
+          Pour changer la clé Groq : allez dans le dashboard Cloudflare Workers → votre Worker → Settings → Variables → <code>GROQ_API_KEY</code>
         </div>
-        <div class="ff"><label>Clé API Groq (commence par gsk_)</label>
-          <div style="display:flex;gap:8px">
-            <input type="password" id="ak-panel-inp" placeholder="gsk_..." style="flex:1">
-            <button class="btn-g" style="flex-shrink:0" onclick="const i=document.getElementById('ak-panel-inp');i.type=i.type==='password'?'text':'password'">👁</button>
-          </div>
-        </div>
-        <div id="ak-panel-result" style="display:none;border-radius:var(--r);padding:9px 13px;margin-bottom:10px;font-size:13px"></div>
-        <div style="display:flex;gap:8px;flex-wrap:wrap">
-          <button class="btn-g" onclick="testApiKeyPanel()">🧪 Tester</button>
-          <button class="btn-p" onclick="saveApiKeyPanel()">💾 Sauvegarder${FB?' dans Firebase':''}</button>
-          <button class="btn-d" onclick="setApiKey('').then(()=>renderPanel())">🗑 Supprimer</button>
+        <div id="worker-check-result" style="border-radius:var(--r);padding:10px 14px;font-size:13px;background:rgba(0,0,0,.2)">
+          🔄 Vérification du service en cours…
         </div>
       </div>
       <div class="ps">
@@ -1293,6 +1299,21 @@ function renderPanel(){
           <button class="btn-d" onclick="clearLogs()">Vider les logs</button>
         </div>
       </div>`;
+    // Vérification async du status Worker
+    checkWorkerStatus().then(ok=>{
+      const el=document.getElementById('worker-check-result');
+      const badge=document.getElementById('worker-status-badge');
+      if(!el) return;
+      if(ok){
+        el.style.background='rgba(74,222,128,.08)';el.style.border='1px solid rgba(74,222,128,.2)';
+        el.innerHTML='✅ <strong style="color:var(--green)">Service IA configuré et opérationnel</strong><br><span style="color:var(--text2);font-size:12px">La clé Groq est sécurisée côté serveur. Tous les utilisateurs peuvent utiliser l\'IA.</span>';
+        if(badge){badge.textContent='✓ Opérationnel';badge.style.color='var(--green)';}
+      } else {
+        el.style.background='rgba(248,113,113,.08)';el.style.border='1px solid rgba(248,113,113,.2)';
+        el.innerHTML='❌ <strong style="color:var(--red)">Worker non configuré ou clé manquante</strong><br><span style="color:var(--text2);font-size:12px">Voir le fichier worker.js pour déployer le backend. URL actuelle : '+WORKER_URL+'</span>';
+        if(badge){badge.textContent='✗ Non configuré';badge.style.color='var(--red)';}
+      }
+    });
   }
 }
 
@@ -1302,7 +1323,12 @@ function togglePrompt(id){const p=gP().map(x=>x.id===id?{...x,active:!x.active}:
 function delPrompt(id){if(!confirm('Supprimer ce prompt ?'))return;sP(gP().filter(x=>x.id!==id));aLog(S.user.email,'Prompt supprimé','admin');renderPanel();}
 function toggleSite(id){sSites(gSites().map(s=>s.id===id?{...s,active:!s.active}:s));renderPanel();}
 function delSite(id){if(!confirm('Supprimer ce site ?'))return;sSites(gSites().filter(s=>s.id!==id));renderPanel();}
-function delUser(id){if(!confirm('Supprimer cet utilisateur ?'))return;sU(gU().filter(u=>u.id!==id));aLog(S.user.email,'Utilisateur supprimé: '+id,'admin');renderPanel();}
+async function delUser(id){
+  if(!confirm('Supprimer cet utilisateur ?'))return;
+  if(FB){ try{await fbDB.ref('users/'+id).remove();}catch(e){} }
+  sU(gU().filter(u=>u.id!==id));
+  aLog(S.user.email,'Utilisateur supprimé: '+id,'admin');renderPanel();
+}
 function clearLogs(){kv('logs',[]);renderPanel();}
 
 // ── MODALS ──
@@ -1479,7 +1505,7 @@ function saveEditPrompt(){
   closeModal();renderPanel();
 }
 
-function saveNewSite(){
+async function saveNewSite(){
   const n=document.getElementById('st-n')?.value.trim();
   const u=document.getElementById('st-u')?.value.trim();
   const c=document.getElementById('st-c')?.value.trim()||'Dev';
@@ -1488,39 +1514,6 @@ function saveNewSite(){
   const s=gSites();s.push({id:'s'+Date.now(),name:n,url:u,cat:c,priority:p,active:true});sSites(s);
   aLog(S.user.email,'Site ajouté: '+n,'admin');
   closeModal();renderPanel();
-}
-
-async function saveApiKeyPanel(){
-  const k=(document.getElementById('ak-panel-inp')?.value||'').trim();
-  if(!k){alert('Entrez votre clé API.');return}
-  if(!k.startsWith('gsk_')){alert('Clé invalide — une clé Groq commence par gsk_');return}
-  await setApiKey(k);
-  const r=document.getElementById('ak-panel-result');
-  if(r){r.style.display='block';r.style.background='rgba(74,222,128,.08)';r.style.border='1px solid rgba(74,222,128,.2)';r.style.color='var(--green)';r.textContent=FB?'✅ Clé sauvegardée dans Firebase — tous les utilisateurs peuvent maintenant utiliser l\'IA !':'✅ Clé sauvegardée localement.';}
-}
-
-async function testApiKeyPanel(){
-  const k=(document.getElementById('ak-panel-inp')?.value||'').trim();
-  const res=document.getElementById('ak-panel-result');
-  if(!k){alert('Entrez d\'abord votre clé.');return}
-  if(res){res.style.display='block';res.style.background='rgba(123,111,255,.08)';res.style.border='1px solid rgba(123,111,255,.2)';res.style.color='var(--primary2)';res.textContent='⏳ Test en cours…';}
-  try{
-    const r=await fetch(API_URL,{
-      method:'POST',
-      headers:{'Content-Type':'application/json','Authorization':'Bearer '+k},
-      body:JSON.stringify({model:GROQ_MODEL,max_tokens:10,messages:[{role:'user',content:'OK'}]})
-    });
-    const data=await r.json();
-    if(data.error){
-      if(res){res.style.background='rgba(248,113,113,.08)';res.style.border='1px solid rgba(248,113,113,.2)';res.style.color='var(--red)';res.textContent='❌ '+( data.error.message||'Clé invalide');}
-    } else if(data.choices?.[0]?.message?.content){
-      if(res){res.style.background='rgba(74,222,128,.08)';res.style.border='1px solid rgba(74,222,128,.2)';res.style.color='var(--green)';res.textContent='✅ Clé valide ! Cliquez sur Sauvegarder.';}
-    } else {
-      if(res){res.style.background='rgba(251,191,36,.08)';res.style.border='1px solid rgba(251,191,36,.2)';res.style.color='var(--yellow)';res.textContent='⚠️ Réponse inattendue, réessayez.';}
-    }
-  }catch(e){
-    if(res){res.style.background='rgba(248,113,113,.08)';res.style.border='1px solid rgba(248,113,113,.2)';res.style.color='var(--red)';res.textContent='❌ Erreur réseau : '+e.message;}
-  }
 }
 
 function saveNewUser(){
